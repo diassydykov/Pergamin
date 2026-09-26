@@ -1,0 +1,18 @@
+/* Pergamin MVP workspace additions: search, library actions and writing progress. */
+.book-actions{position:relative;font:12px system-ui,sans-serif}
+.book-actions summary{list-style:none;cursor:pointer;padding:9px 12px;border:1px solid #c8baa4;border-radius:5px;background:#fffaf0;color:#403527;white-space:nowrap}
+.book-actions summary::-webkit-details-marker{display:none}
+.book-actions[open] summary,.book-actions summary:hover{background:#e9dcc4}
+.book-actions-menu{position:absolute;right:0;top:calc(100% + 7px);z-index:50;display:grid;min-width:210px;padding:7px;background:#f9f1df;border:1px solid #c8b184;border-radius:8px;box-shadow:0 12px 32px #3b291b45}
+.book-actions-menu button{text-align:left;border:0;background:transparent;padding:9px 10px}
+.book-actions-menu button:hover{background:#eadcc1}
+.book-actions-menu .danger{color:#8b2f26;border-top:1px solid #d9c7a8;border-radius:0;margin-top:3px;padding-top:11px}
+.writing-stats{display:flex;align-items:center;gap:14px;min-height:32px;margin:-9px 12px 8px;padding:6px 12px;border:1px solid #cab995;border-radius:7px;background:#f5ead3d9;color:#6d5a3d;font:11px system-ui,sans-serif;box-shadow:0 2px 8px #4c352018}
+.writing-stats strong{font-size:13px;color:#493824}.writing-stats label{display:flex;flex-direction:row;align-items:center;gap:6px;margin-left:auto}.writing-stats input{width:78px;padding:4px 6px}.writing-stats progress{width:120px;height:8px;accent-color:#836437}.writing-stats progress[value="0"]{opacity:.45}
+.search-panel{position:fixed;z-index:45;top:86px;right:24px;width:min(390px,calc(100vw - 32px));max-height:min(70vh,620px);overflow:auto;padding:16px;background:#f8efdc;border:1px solid #bda477;border-radius:10px;box-shadow:0 18px 55px #30211655;font:13px system-ui,sans-serif}
+.search-panel[hidden]{display:none}.search-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.search-row label{font-weight:700;font-size:13px;color:#4a3825}.search-row button{border:0;background:transparent;font-size:25px;line-height:1;padding:0 4px}.search-panel>input{width:100%;padding:10px 12px;border-radius:7px}.search-summary{margin:9px 1px;color:#77644a}.search-results{display:grid;gap:7px}.search-result{display:block;width:100%;white-space:normal;text-align:left;padding:9px 10px;background:#fffaf0;border:1px solid #d4c09c;line-height:1.35}.search-result:hover,.search-result.active{background:#ead9b8;border-color:#99794a}.search-result mark{background:#f1ca72;color:#32210f;padding:0 1px}.search-empty{padding:18px;text-align:center;color:#87765e;border:1px dashed #cdb996;border-radius:7px}
+.illus:focus-visible{outline:3px solid #7b5729;outline-offset:5px}
+@media(max-width:1100px){.writing-stats{flex-wrap:wrap}.writing-stats label{margin-left:0}.search-panel{top:150px}}
+.page-frame,.frame-body,.page-viewport,.page-scroll,.book,#page{min-width:0}
+.page-scroll,.book{width:100%}
+@media(max-width:700px){.book-actions-menu{position:fixed;right:12px;top:62px}.toolbar{position:relative;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;padding:8px 10px;gap:8px;scrollbar-width:thin}.toolbar>.brand{flex:0 0 auto;font-size:19px;margin-right:2px}.toolbar>.brand small{display:none}.toolbar>.tools,.toolbar>label{flex:0 0 auto}.toolbar>.library{flex:0 0 auto}.toolbar>.right{flex:0 0 auto;margin-left:0}.writing-stats{margin:0 2px 8px;gap:8px;flex-wrap:nowrap;overflow-x:auto;min-height:38px}.writing-stats>span,.writing-stats>label,.writing-stats>progress{flex:0 0 auto}.writing-stats progress{width:90px}.search-panel{top:12px;right:12px;max-height:calc(100vh - 24px)}#goal-label{display:none}main{margin-top:6px}.book.twp #book-title{display:block}.book.twp #book-title .rt-r{display:none}.book,#page{max-width:100%;overflow:hidden}}

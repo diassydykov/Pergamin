@@ -3,15 +3,26 @@
 const $ = id => document.getElementById(id);
 const ms = $('ms'), books = new Map(), events = new Map(), ranges = new Map();
 const viewportEl = $('page-scroll');
-let db, active = '', timer, toastTimer, dirty = false, revision = 0;
+let db, active = '', timer, toastTimer, dirty = false, savePending = 0, revision = 0;
+const latestSaveRev = new Map(), failedSaves = new Set();
 const font = "'Cormorant Garamond', Georgia, serif";
 function toast(msg) { $('toast').textContent = String(msg); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 4200); }
 function emit(evt, value) { for (const cb of events.get(evt) || []) { try { cb(value); } catch (error) { console.error(error); } } }
 function persist(book) {
- const rev = ++revision; $('saved').textContent = 'Сохраняем…';
- const tx = db.transaction('books', 'readwrite'); tx.objectStore('books').put(book);
- tx.oncomplete = () => { if (rev === revision && !dirty) $('saved').textContent = '✓ Сохранено'; };
- tx.onabort = tx.onerror = () => { $('saved').textContent = 'Не сохранено'; toast('Не удалось сохранить книгу. Проверьте свободное место на устройстве.'); };
+ const rev = ++revision, id=book.id; latestSaveRev.set(id,rev); savePending++; $('saved').textContent = 'Сохраняем…';
+ return new Promise(resolve => {
+  let tx, settled=false;
+  const finish=(ok,error)=>{
+   if(settled)return; settled=true; savePending=Math.max(0,savePending-1);
+   if(ok){ if(latestSaveRev.get(id)===rev)failedSaves.delete(id); }
+   else if(latestSaveRev.get(id)===rev){ failedSaves.add(id); if(id===active)dirty=true; console.error(error); toast('Не удалось сохранить книгу. Проверьте свободное место на устройстве.'); }
+   $('saved').textContent=(!dirty&&!savePending&&!failedSaves.size)?'✓ Сохранено':'Не сохранено'; resolve(ok);
+  };
+  try { tx = db.transaction('books', 'readwrite'); tx.objectStore('books').put(book); }
+  catch (error) { finish(false,error); return; }
+  tx.oncomplete = () => finish(true);
+  tx.onabort = tx.onerror = () => finish(false,tx.error||new Error('Ошибка IndexedDB'));
+ });
 }
 function applyStyle(book) {
  ms.style.fontFamily = book.font; ms.style.fontSize = book.fsize + 'px';
@@ -27,14 +38,18 @@ function updateBook(id, patch) {
  const old = books.get(id); if (!old) return;
  // Flush local typing before merging external AI metadata.
  if (id === active && dirty) { old.content = contentHTML(); dirty = false; clearTimeout(timer); }
- const book = {...old, ...patch, id:old.id, updatedAt:Date.now()};
- book.illusHistory = book.illusHistory.slice(-10);
+ const book = normalizeBook({...old, ...patch, id:old.id, updatedAt:Date.now()});
  books.set(id, book);
- if (id === active) { if ('content' in patch && ms.innerHTML !== book.content) { ms.innerHTML = book.content; ranges.delete(id); } applyStyle(book); }
+ if (id === active) { if ('content' in patch && ms.innerHTML !== book.content) { ms.innerHTML = book.content; ranges.delete(id); } applyStyle(book); updateWritingStats(); if (!$('search-panel').hidden) renderSearch(); }
  if ('title' in patch) refreshLibrary();
- persist(book);
+ return persist(book);
 }
-function flush() { clearTimeout(timer); if (dirty && active) updateBook(active, {content:contentHTML()}); }
+function flush() {
+ clearTimeout(timer); const tasks=[], retryIds=new Set(failedSaves);
+ if(dirty&&active){retryIds.delete(active);tasks.push(updateBook(active,{content:contentHTML()}));}
+ for(const id of retryIds){const book=books.get(id);if(book)tasks.push(persist(book));}
+ return tasks.length?Promise.all(tasks).then(results=>results.every(Boolean)):Promise.resolve(!failedSaves.size);
+}
 // One-time migration of every figure on open: strip the old figcaption (keep its
 // text as data-excerpt so "regenerate" still has a prompt), crop the watermark,
 // and give Word-like float wrap. No-ops once a figure is already up to date.
@@ -46,6 +61,9 @@ function cleanLegacyFigures(bookId){
    let changedAny = false;
    for (const fig of figs) {
     const img = fig.querySelector('img'); if (!img) continue;
+    if (!fig.dataset.figureId) { fig.dataset.figureId = crypto.randomUUID ? crypto.randomUUID() : Date.now()+'-'+Math.random().toString(36).slice(2); changedAny = true; }
+    if (fig.tabIndex !== 0) { fig.tabIndex = 0; changedAny = true; }
+    if (!fig.getAttribute('aria-label')) { fig.setAttribute('aria-label','Иллюстрация книги. Enter — выбрать, стрелки — переместить.'); changedAny = true; }
     // 0) Self-heal: UI-only classes (sel/moving) that an earlier build baked into
     // the saved markup — strip them and persist the clean content.
     if (fig.classList.contains('sel') || fig.classList.contains('moving')) { fig.classList.remove('sel','moving'); changedAny = true; }
@@ -70,7 +88,7 @@ function cleanLegacyFigures(bookId){
   })();
  } catch (e) { console.warn('cleanLegacyFigures', e); }
 }
-function changed() { dirty = true; $('saved').textContent = 'Изменения…'; clearTimeout(timer); timer = setTimeout(flush, 500); }
+function changed() { dirty = true; $('saved').textContent = 'Изменения…'; updateWritingStats(); if (!$('search-panel').hidden) renderSearch(); clearTimeout(timer); timer = setTimeout(flush, 500); }
 // HTML to persist: clone the content and strip transient UI-only classes
 // (selected/moving) so they never leak into the saved book markup.
 function contentHTML(){
@@ -78,17 +96,157 @@ function contentHTML(){
  c.querySelectorAll('figure.illus').forEach(f => f.classList.remove('sel','moving'));
  return c.innerHTML;
 }
+function sanitizeContent(html){
+ const host = document.createElement('div'); host.innerHTML = String(html || '');
+ const dangerous = 'script,style,iframe,object,embed,link,meta,form,input,button,textarea,select,svg,math,video,audio,source,picture,canvas,template';
+ host.querySelectorAll(dangerous).forEach(el => el.remove());
+ const allowedTags = new Set(['P','BR','DIV','H1','H2','H3','H4','STRONG','B','I','EM','U','S','SPAN','BLOCKQUOTE','UL','OL','LI','FIGURE','IMG','HR']);
+ const allowedStyles = new Set(['float','width','max-width','margin','margin-top','margin-right','margin-bottom','margin-left','transform','opacity','padding-left','padding-right','text-indent','text-align','font-weight','font-style','text-decoration','white-space']);
+ const safeCss = (name,value) => {
+  const v=String(value||'').trim(); if(!v||/url\s*\(|expression\s*\(|@import|javascript:|var\s*\(/i.test(v))return '';
+  if(name==='float')return /^(left|right|none)$/.test(v)?v:'';
+  if(['width','max-width','padding-left','padding-right','text-indent'].includes(name))return /^-?\d+(?:\.\d+)?(?:px|%|em|rem)$/.test(v)?v:'';
+  if(name.startsWith('margin'))return /^(?:-?\d+(?:\.\d+)?(?:px|%|em|rem)|0|auto)(?:\s+(?:-?\d+(?:\.\d+)?(?:px|%|em|rem)|0|auto)){0,3}$/.test(v)?v:'';
+  if(name==='transform')return /^translate\(-?\d+(?:\.\d+)?px,\s*-?\d+(?:\.\d+)?px\)$/.test(v)?v:'';
+  if(name==='opacity')return /^(?:0(?:\.\d+)?|1(?:\.0+)?)$/.test(v)?v:'';
+  if(name==='text-align')return /^(left|right|center|justify|start|end)$/.test(v)?v:'';
+  if(name==='font-weight')return /^(normal|bold|[1-9]00)$/.test(v)?v:'';
+  if(name==='font-style')return /^(normal|italic)$/.test(v)?v:'';
+  if(name==='text-decoration')return /^(none|underline|line-through)$/.test(v)?v:'';
+  if(name==='white-space')return /^(normal|pre|pre-wrap)$/.test(v)?v:'';
+  return '';
+ };
+ for (const el of Array.from(host.querySelectorAll('*'))) {
+  if(!allowedTags.has(el.tagName)){ el.replaceWith(...el.childNodes); continue; }
+  const safeStyle=[]; for(const name of allowedStyles){ const value=safeCss(name,el.style.getPropertyValue(name)); if(value)safeStyle.push(name+':'+value); }
+  const keep=new Map();
+  if(el.tagName==='FIGURE'){
+   keep.set('class','illus'); keep.set('contenteditable','false'); keep.set('tabindex','0'); keep.set('aria-label','Иллюстрация книги. Enter — выбрать, стрелки — переместить.');
+   for(const name of ['data-figure-id','data-prompt','data-excerpt','data-wraps','data-cropped','data-nudge-x','data-nudge-y'])if(el.hasAttribute(name))keep.set(name,el.getAttribute(name).slice(0,name==='data-prompt'?4000:500));
+  } else if(el.tagName==='IMG'){
+   const src=el.getAttribute('src')||''; if(/^data:image\/(png|jpeg|jpg|webp|gif|avif);base64,/i.test(src))keep.set('src',src); keep.set('alt',String(el.getAttribute('alt')||'Иллюстрация').slice(0,500));
+  }
+  for(const attr of Array.from(el.attributes))el.removeAttribute(attr.name);
+  for(const [name,value] of keep)el.setAttribute(name,value);
+  if(safeStyle.length)el.setAttribute('style',safeStyle.join(';'));
+ }
+ return host.innerHTML;
+}
+function normalizeBook(raw){
+ const now = Date.now(), b = raw && typeof raw === 'object' ? raw : {};
+ return {
+  id:String(b.id || (crypto.randomUUID ? crypto.randomUUID() : now + '-' + Math.random().toString(36).slice(2))),
+  title:String(b.title || 'Без названия').slice(0,160), byline:String(b.byline || '').slice(0,160),
+  content:String(b.content || ''), font:String(b.font || font), fsize:Math.max(15,Math.min(30,Number(b.fsize)||22)),
+  headingFont:String(b.headingFont || font), headingStyle:b.headingStyle === 'italic' ? 'italic' : 'normal',
+  paper:/^#[0-9a-f]{6}\|#[0-9a-f]{6}$/i.test(String(b.paper || '')) ? b.paper : '#f2e4c4|#d6bd8b',
+  illusStyle:String(b.illusStyle || '').slice(0,2000), illusHistory:Array.isArray(b.illusHistory) ? b.illusHistory.slice(-10).map(h=>({id:String(h?.id||''),what:String(h?.what||'').slice(0,500),prompt:String(h?.prompt||'').slice(0,4000),ts:Number(h?.ts)||now})) : [],
+  wordGoal:Math.max(0,Math.min(10000000,Number(b.wordGoal)||0)),
+  createdAt:Number(b.createdAt)||now, updatedAt:Number(b.updatedAt)||now
+ };
+}
+function textMap(root){
+ const parts=[], spans=[]; let length=0;
+ const blocks=new Set(['P','DIV','H1','H2','H3','H4','BLOCKQUOTE','LI','UL','OL','FIGURE','HR']);
+ const space=()=>{ if(length && !/\s$/.test(parts[parts.length-1]||'')){parts.push(' ');length++;} };
+ const walk=node=>{
+  if(node.nodeType===Node.TEXT_NODE){const value=node.nodeValue||'';if(value){spans.push({node,start:length,end:length+value.length});parts.push(value);length+=value.length;}return;}
+  if(node.nodeType!==Node.ELEMENT_NODE)return;
+  if(node.tagName==='BR'){space();return;}
+  const block=blocks.has(node.tagName); if(block)space(); for(const child of node.childNodes)walk(child); if(block)space();
+ };
+ for(const child of root.childNodes)walk(child);
+ return {text:parts.join('').replace(/\u00a0/g,' '),spans};
+}
+function textStats(value){
+ const host = document.createElement('div'); host.innerHTML = String(value || '');
+ const text = textMap(host).text.replace(/\s+/g,' ').trim();
+ const words = text ? (text.match(/[\p{L}\p{N}]+(?:[-’'][\p{L}\p{N}]+)*/gu) || []).length : 0;
+ return {words, chars:text.length, readingMinutes:words ? Math.max(1,Math.ceil(words/200)) : 0, text};
+}
+function updateWritingStats(){
+ const stats = textStats(contentHTML());
+ $('stat-words').textContent = stats.words.toLocaleString('ru-RU'); $('stat-chars').textContent = stats.chars.toLocaleString('ru-RU');
+ $('stat-reading').textContent = stats.readingMinutes + ' мин чтения';
+ const goal = Math.max(0, Number(books.get(active)?.wordGoal)||0); $('word-goal').value = goal || '';
+ $('goal-progress').max = Math.max(1, goal); $('goal-progress').value = goal ? Math.min(goal, stats.words) : 0;
+ $('goal-label').textContent = goal ? Math.min(100,Math.round(stats.words/goal*100)) + '% · ' + Math.max(0,goal-stats.words).toLocaleString('ru-RU') + ' осталось' : 'Цель не задана';
+ return stats;
+}
+function foldText(value){
+ const source=String(value||''), parts=[], map=[]; let offset=0;
+ for(const char of source){const folded=char.toLocaleLowerCase('ru-RU');parts.push(folded);for(let i=0;i<folded.length;i++)map.push({start:offset,end:offset+char.length});offset+=char.length;}
+ return {text:parts.join(''),map};
+}
+function searchBook(query, root = ms){
+ const rawQuery=String(query || '').trim(); if (!rawQuery) return [];
+ const text = textMap(root).text, folded=foldText(text), q=foldText(rawQuery).text, lower=folded.text, out = [];
+ let from = 0, index;
+ while ((index = lower.indexOf(q, from)) !== -1 && out.length < 500) {
+  const originalStart=folded.map[index]?.start??0, originalEnd=folded.map[index+q.length-1]?.end??originalStart;
+  const start = Math.max(0,originalStart-45), end = Math.min(text.length,originalEnd+65);
+  out.push({index:originalStart, length:originalEnd-originalStart, snippet:(start ? '…' : '') + text.slice(start,end).replace(/\s+/g,' ') + (end < text.length ? '…' : '')});
+  from = index + Math.max(1,q.length);
+ }
+ return out;
+}
+function rangeForTextOffset(offset, length){
+ const {spans}=textMap(ms); let start=null, end=null;
+ for(const span of spans){
+  const size=(span.node.nodeValue||'').length;
+  if(!start && offset<=span.end)start={node:span.node,offset:Math.max(0,Math.min(size,offset-span.start))};
+  if(offset+length<=span.end){end={node:span.node,offset:Math.max(0,Math.min(size,offset+length-span.start))};break;}
+ }
+ if(!start)return null; if(!end)end={node:start.node,offset:Math.min((start.node.nodeValue||'').length,start.offset+length)};
+ const r=document.createRange(); r.setStart(start.node,start.offset); r.setEnd(end.node,end.offset); return r;
+}
+function renderSearch(){
+ const q=$('search-input').value, results=searchBook(q), host=$('search-results'); host.replaceChildren();
+ $('search-summary').textContent = q.trim() ? (results.length ? 'Найдено: '+results.length : 'Совпадений нет') : 'Введите запрос';
+ if (!q.trim() || !results.length) { const empty=document.createElement('div'); empty.className='search-empty'; empty.textContent=q.trim()?'Попробуйте другой запрос':'Поиск работает по всей открытой книге'; host.append(empty); return results; }
+ results.slice(0,100).forEach((item,i)=>{ const b=document.createElement('button'); b.type='button'; b.className='search-result'; b.textContent=(i+1)+'. '+item.snippet; b.addEventListener('click',()=>{ const r=rangeForTextOffset(item.index,item.length); if(!r)return; const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r); ranges.set(active,r.cloneRange()); r.startContainer.parentElement?.scrollIntoView({block:'center'}); ms.focus(); host.querySelectorAll('.active').forEach(x=>x.classList.remove('active')); b.classList.add('active'); }); host.append(b); });
+ return results;
+}
+function setSearch(open){ $('search-panel').hidden=!open; $('search-toggle').setAttribute('aria-expanded',String(open)); if(open){ renderSearch(); requestAnimationFrame(()=>$('search-input').focus()); } }
+function createBackup(){
+ flush(); return {app:'pergamin',version:1,exportedAt:new Date().toISOString(),books:Array.from(books.values(),b=>structuredClone(b))};
+}
+async function restoreBackup(payload){
+ if (!payload || payload.app !== 'pergamin' || payload.version !== 1 || !Array.isArray(payload.books) || !payload.books.length) throw new Error('Файл использует неподдерживаемый формат резервной копии Пергамина');
+ if (payload.books.length > 1000) throw new Error('В резервной копии слишком много книг');
+ const saved=await flush();
+ if(!saved)throw new Error('Не удалось сохранить текущую книгу перед восстановлением');
+ const restored=payload.books.map(raw=>{ const b=normalizeBook(raw); b.content=sanitizeContent(b.content); b.updatedAt=Date.now(); return b; });
+ await new Promise((resolve,reject)=>{ const tx=db.transaction('books','readwrite'), store=tx.objectStore('books'); restored.forEach(b=>store.put(b)); tx.oncomplete=resolve; tx.onerror=tx.onabort=()=>reject(tx.error||new Error('Ошибка записи')); });
+ restored.forEach(b=>books.set(b.id,b)); refreshLibrary(); openBook(restored[0].id); return restored.length;
+}
+function safeFilename(name){ return String(name||'book').trim().replace(/[<>:"/\\|?*\x00-\x1F]+/g,'_').replace(/[. ]+$/,'').slice(0,90)||'book'; }
+function downloadFile(name, data, type){ const blob=data instanceof Blob?data:new Blob([data],{type}); const url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url; a.download=name; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); }
+function exportCurrentBook(){
+ flush(); const b=books.get(active); if(!b)return; const clean=sanitizeContent(contentHTML());
+ const title=b.title.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const doc='<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>'+title+'</title><style>body{max-width:850px;margin:40px auto;padding:0 28px;color:#2f261d;background:#f5ead2;font:21px/1.65 Georgia,serif}h1{text-align:center;font-weight:400}img{max-width:100%;height:auto}figure{margin:28px auto;text-align:center;break-inside:avoid}@media print{body{background:#fff;margin:0}}</style></head><body><h1>'+title+'</h1>'+clean+'</body></html>';
+ downloadFile(safeFilename(b.title)+'.html',doc,'text/html;charset=utf-8');
+}
+async function deleteBook(id){
+ if(!books.has(id))return false;
+ if(id===active){clearTimeout(timer);dirty=false;}else{const saved=await flush();if(!saved)throw new Error('Не удалось сохранить текущую книгу перед удалением');}
+ const remaining=Array.from(books.keys()).filter(x=>x!==id); let replacement=null;
+ if(!remaining.length){ replacement=makeBook('Новая книга'); remaining.push(replacement.id); }
+ await new Promise((resolve,reject)=>{ const tx=db.transaction('books','readwrite'), store=tx.objectStore('books'); store.delete(id); if(replacement)store.put(replacement); tx.oncomplete=resolve; tx.onerror=tx.onabort=()=>reject(tx.error||new Error('Ошибка удаления')); });
+ failedSaves.delete(id);latestSaveRev.delete(id);books.delete(id); if(replacement)books.set(replacement.id,replacement); refreshLibrary(); openBook(remaining[0]); return true;
+}
 function openBook(id) {
  if (!books.has(id)) return; flush(); active = id; try { localStorage.setItem('pg.lastBook', id); } catch (e) {} ms.innerHTML = books.get(id).content;
  // strip UI-only state classes that may have been persisted in the saved markup
  ms.querySelectorAll('figure.illus.sel, figure.illus.moving').forEach(f => f.classList.remove('sel', 'moving'));
  ranges.clear(); window.getSelection()?.removeAllRanges(); applyStyle(books.get(id)); $('books').value = id; $('heading').value = 'p';
- cleanLegacyFigures(id);
+ cleanLegacyFigures(id); updateWritingStats(); if (!$('search-panel').hidden) renderSearch();
  emit('bookopen', id);
 }
 function makeBook(title, style = '', content = '') {
  const now = Date.now();
- return {id:crypto.randomUUID ? crypto.randomUUID() : now + '-' + Math.random().toString(36).slice(2),title,byline:'',content,font,fsize:22,headingFont:font,headingStyle:'normal',paper:'#f2e4c4|#d6bd8b',illusStyle:style,illusHistory:[],createdAt:now,updatedAt:now};
+ return {id:crypto.randomUUID ? crypto.randomUUID() : now + '-' + Math.random().toString(36).slice(2),title,byline:'',content,font,fsize:22,headingFont:font,headingStyle:'normal',paper:'#f2e4c4|#d6bd8b',illusStyle:style,illusHistory:[],wordGoal:0,createdAt:now,updatedAt:now};
 }
 function selectionRange() {
  const sel = window.getSelection(); if (!sel || !sel.rangeCount) return null;
@@ -103,9 +261,10 @@ function command(name, value) {
  restoreSelection(); document.execCommand(name, false, value); changed();
 }
 function insertFigureAtSelection(bookId, {dataUrl, caption, prompt}) {
- const book = books.get(bookId); if (!book) return;
- if (!/^data:image\/(png|jpeg|jpg|webp|gif|avif);base64,/i.test(dataUrl)) { toast('Не удалось вставить изображение: нужен dataURL изображения.'); return; }
- const figure = document.createElement('figure'); figure.className = 'illus'; figure.contentEditable = 'false';
+ const book = books.get(bookId); if (!book) return false;
+ if (!/^data:image\/(png|jpeg|jpg|webp|gif|avif);base64,/i.test(dataUrl)) { toast('Не удалось вставить изображение: нужен dataURL изображения.'); return false; }
+ const figure = document.createElement('figure'); figure.className = 'illus'; figure.contentEditable = 'false'; figure.tabIndex = 0; figure.setAttribute('aria-label','Иллюстрация книги. Enter — выбрать, стрелки — переместить.');
+ const figureId = crypto.randomUUID ? crypto.randomUUID() : Date.now()+'-'+Math.random().toString(36).slice(2); figure.dataset.figureId = figureId;
  figure.dataset.prompt = String(prompt || ''); figure.dataset.excerpt = String(caption || '');
  figure.dataset.wraps = 'left'; figure.dataset.cropped = '1';
  figure.style.cssText = 'float:left;width:55%;margin:0 14px 8px 0';
@@ -128,7 +287,8 @@ function insertFigureAtSelection(bookId, {dataUrl, caption, prompt}) {
   const next = document.createElement('p'); next.innerHTML = '<br>'; if (!figure.nextSibling) figure.after(next);
   ranges.delete(bookId); content = contentHTML();
  } else { const host = document.createElement('div'); host.innerHTML = book.content; host.append(figure); content = host.innerHTML; }
- updateBook(bookId, {content, illusHistory:[...book.illusHistory, {what:String(caption || ''), dataUrl, ts:Date.now()}].slice(-10)});
+ updateBook(bookId, {content, illusHistory:[...book.illusHistory, {id:figureId, what:String(caption || ''), prompt:String(prompt || ''), ts:Date.now()}].slice(-10)});
+ return true;
 }
 window.__pg__ = {
  currentBookId:() => active,
@@ -140,6 +300,7 @@ window.__pg__ = {
  toast,
  on:(evt, cb) => { if (!events.has(evt)) events.set(evt, new Set()); events.get(evt).add(cb); }
 };
+window.__pgMvp__ = {textStats, searchBook, createBackup, restoreBackup, deleteBook, exportCurrentBook, flush};
 function connectivity() { const online = navigator.onLine; $('ai-gen').disabled = !online || !active; $('ai-gen').title = online ? 'Иллюстрация к выделенному тексту' : 'нет интернета'; $('connection').textContent = online ? 'Локальная библиотека' : 'Офлайн · можно писать'; emit(online ? 'online' : 'offline'); }
 $('ai-gen').onclick = () => toast('ИИ-модуль загружается…');
 // The module owns its click handler once its script has loaded successfully.
@@ -161,7 +322,7 @@ function positionFigUI(){
  figHint.style.left = Math.max(8, Math.min(window.innerWidth - 300, r.left)) + 'px'; figHint.style.top = (r.bottom + 7) + 'px';
 }
 function selectFigure(fig){ clearFigSel(); figSel=fig; fig.classList.add('sel'); positionFigUI(); figTools.classList.add('show'); figResize.classList.add('show'); figHint.classList.add('show'); }
-function removeFigure(fig){ const next=fig.nextElementSibling; fig.remove(); if(!next){ const p=document.createElement('p'); p.innerHTML='<br>'; ms.append(p);} changed(); clearFigSel(); }
+function removeFigure(fig){ const next=fig.nextElementSibling, figureId=fig.dataset.figureId||''; fig.remove(); if(!next){ const p=document.createElement('p'); p.innerHTML='<br>'; ms.append(p);} const book=books.get(active); clearFigSel(); if(book) updateBook(active,{content:contentHTML(),illusHistory:book.illusHistory.filter(h=>!figureId||h.id!==figureId)}); }
 // Word-style wrap mode: data-wraps = none (block) | left | right (text flows around)
 function applyFigWrap(fig, mode){
  fig.dataset.wraps = mode;
@@ -222,6 +383,8 @@ function dropFigure(fig, clientX, clientY){
  if(!fig.nextElementSibling){ const p=document.createElement('p'); p.innerHTML='<br>'; fig.after(p); }
  changed(); positionFigUI();
 }
+ms.addEventListener('focusin', e => { const fig=e.target.closest?.('figure.illus'); if(fig) selectFigure(fig); });
+ms.addEventListener('keydown', e => { const fig=e.target.closest?.('figure.illus'); if(fig && (e.key==='Enter'||e.key===' ')){ e.preventDefault(); selectFigure(fig); } });
 ms.addEventListener('pointerdown', e => {
  const fig = e.target.closest('figure.illus');
  if(!fig){ clearFigSel(); return; }
@@ -263,7 +426,8 @@ figTools.addEventListener('click', e => {
 viewportEl.addEventListener('scroll', positionFigUI);
 window.addEventListener('resize', positionFigUI);
 window.addEventListener('blur', clearFigSel);
-document.addEventListener('selectionchange', () => { const r=selectionRange(); if(!r) clearFigSel(); });
+function updateCommandState(){ for(const el of document.querySelectorAll('[data-command]')){ const cmd=el.dataset.command; if(cmd==='__tab')continue; let on=false; try{on=document.queryCommandState(cmd);}catch(e){} el.setAttribute('aria-pressed',String(on)); } }
+document.addEventListener('selectionchange', () => { const r=selectionRange(); if(!r) clearFigSel(); updateCommandState(); });
 document.addEventListener('selectionchange', () => { const r = selectionRange(); if (r && active) { ranges.set(active, r.cloneRange()); emit('selection', r.toString().trim()); } rulerSync(); });
 
 // ── Regenerate a figure (random seed → genuinely new illustration) ──
@@ -277,6 +441,7 @@ function regenFigure(fig){
  if (!prompt) { toast('Нет данных для повторной генерации'); return; }
  if (!window.__pgAiFetchIllustration) { toast('ИИ-модуль ещё не готов, попробуйте ещё раз'); return; }
  regenBusy = true;
+ const regenBookId=active;
  const prevSrc = fig.querySelector('img') ? fig.querySelector('img').getAttribute('src') : '';
  fig.style.opacity = '.55';
  const seed = 1 + Math.floor(Math.random() * 2e9);
@@ -285,15 +450,15 @@ function regenFigure(fig){
  window.__pgAiFetchIllustration(prompt, seed, ctrl.signal)
  .then(blob => { if (!blob || !blob.type || blob.type.indexOf('image/') !== 0) throw new Error('Ответ не изображение'); return cropWatermark(blob); })
  .then(dataUrl => {
-  const img = fig.querySelector('img'); if (img) img.src = dataUrl;
-  fig.dataset.dataUrl = dataUrl;
+  if(active!==regenBookId||!books.has(regenBookId)||!fig.isConnected||!ms.contains(fig))throw new Error('Книга была переключена или удалена — результат не применён');
+  const img = fig.querySelector('img'); if (!img)throw new Error('Иллюстрация больше недоступна'); img.src = dataUrl;
   fig.style.opacity = '';
   changed();
   toast('Готово — новая иллюстрация');
  })
  .catch(err => {
-  if (prevSrc) { const img = fig.querySelector('img'); if (img) img.src = prevSrc; }
-  fig.style.opacity = '';
+  if (prevSrc && fig.isConnected) { const img = fig.querySelector('img'); if (img) img.src = prevSrc; }
+  if(fig.isConnected)fig.style.opacity = '';
   toast(err && err.name === 'AbortError' ? 'Таймаут генерации (90 с)' : 'Ошибка: ' + String(err && err.message || 'генерация').slice(0, 80));
  })
  .then(() => { clearTimeout(timer); regenBusy = false; });
@@ -428,12 +593,12 @@ setRuler(rulerOn);
 const pgPrev = $('pg-prev'), pgNext = $('pg-next'), pgCount = $('pg-count');
 let pgN = 1, pgI = 0;
 function pgMetrics() {
- const vh = viewportEl.clientHeight;
- const total = viewportEl.scrollHeight;
- // distinct reachable scroll positions (last fragment that can't be reached is not a page)
- const n = Math.max(1, Math.floor((total - vh) / vh) + 1);
- const i = Math.min(n - 1, Math.max(0, Math.round(viewportEl.scrollTop / vh)));
- return {vh, n, i};
+ const vh = Math.max(1, viewportEl.clientHeight);
+ const total = viewportEl.scrollHeight, maxScroll = Math.max(0, total - vh);
+ // Include a final partial viewport: wheel/touch pagination must never make the tail unreachable.
+ const n = Math.max(1, Math.ceil(maxScroll / vh) + 1);
+ const i = maxScroll > 0 && viewportEl.scrollTop >= maxScroll - 2 ? n - 1 : Math.min(n - 1, Math.max(0, Math.floor(viewportEl.scrollTop / vh)));
+ return {vh, n, i, maxScroll};
 }
 function pgPaint() {
  const {n, i} = pgMetrics();
@@ -444,8 +609,9 @@ function pgPaint() {
 }
 let pgAnimT = null, pgLastTurn = 0;
 function pgGo(i) {
- const {vh, n} = pgMetrics();
- viewportEl.scrollTop = Math.max(0, Math.min(n - 1, i)) * vh;
+ const {vh, n, maxScroll} = pgMetrics();
+ const target = Math.max(0, Math.min(n - 1, i));
+ viewportEl.scrollTop = target === n - 1 ? maxScroll : target * vh;
 }
 function pgTurn(dir, animate = true) {
  const {n, i} = pgMetrics();
@@ -469,6 +635,8 @@ viewportEl.addEventListener('wheel', e => {
  pgWheelT = setTimeout(() => { if (Date.now() - pgLastTurn >= 240) pgTurn(e.deltaY > 0 ? 1 : -1); }, 140);
 }, {passive: false});
 document.addEventListener('keydown', e => {
+ const target=e.target, tag=target?.tagName; const formField=tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||target?.closest?.('dialog');
+ if (formField && !figSel) return;
  if (e.key === 'PageDown') { e.preventDefault(); pgTurn(1); }
  else if (e.key === 'PageUp') { e.preventDefault(); pgTurn(-1); }
  // Word-like: while a figure is selected, ALL arrow keys nudge it by pixels
@@ -530,7 +698,7 @@ ms.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   const map = { b:'bold', i:'italic', u:'underline', l:'justifyLeft', e:'justifyCenter', r:'justifyRight', j:'justifyFull' };
   if (map[k]) { e.preventDefault(); command(map[k]); }
-  else if (k === 's') { e.preventDefault(); flush(); toast('Сохранено'); }
+  else if (k === 's') { e.preventDefault(); flush().then(ok=>toast(ok?'Сохранено':'Сохранить не удалось')); }
  }
 });
 ms.addEventListener('paste', e => { e.preventDefault(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); changed(); });
@@ -543,19 +711,38 @@ $('fsize').addEventListener('change', e => { const size = Math.max(15, Math.min(
 $('paper').addEventListener('change', e => updateBook(active, {paper:e.target.value}));
 const pagesSel = $('pages');
 const bookEl = document.querySelector('.book');
-function applyPages(mode) { bookEl.classList.toggle('twp', mode === '2'); pagesSel.value = mode; }
-pagesSel.addEventListener('change', () => { applyPages(pagesSel.value); try { localStorage.setItem('pg.pages', pagesSel.value); } catch (e) {} });
+function applyPages(mode) { const effective = window.matchMedia('(max-width:700px)').matches ? '1' : mode; bookEl.classList.toggle('twp', effective === '2'); pagesSel.value = effective; pgPaint(); }
+pagesSel.addEventListener('change', () => { const mode=pagesSel.value; applyPages(mode); try { localStorage.setItem('pg.pages', mode); } catch (e) {} });
+window.matchMedia('(max-width:700px)').addEventListener?.('change',()=>{ let mode='2'; try{mode=localStorage.getItem('pg.pages')||'2';}catch(e){} applyPages(mode); });
 $('heading-style').addEventListener('change', e => updateBook(active, {headingStyle:e.target.value}));
 $('new-book').addEventListener('click', () => { flush(); $('new-form').reset(); $('new-dialog').showModal(); $('new-title').focus(); });
 $('cancel-new').addEventListener('click', () => $('new-dialog').close());
 $('new-form').addEventListener('submit', e => { e.preventDefault(); const title = $('new-title').value.trim(); if (!title) { $('new-title').focus(); return; } flush(); const book = makeBook(title, $('new-style').value.trim()); books.set(book.id, book); persist(book); refreshLibrary(); openBook(book.id); $('new-dialog').close(); ms.focus(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); }); window.addEventListener('pagehide', flush); window.addEventListener('beforeunload', flush);
+$('search-toggle').addEventListener('click',()=>setSearch($('search-panel').hidden));
+$('search-close').addEventListener('click',()=>setSearch(false));
+$('search-input').addEventListener('input',renderSearch);
+$('search-input').addEventListener('keydown',e=>{ if(e.key==='Escape'){e.preventDefault();setSearch(false);} else if(e.key==='Enter'){e.preventDefault();$('search-results').querySelector('.search-result')?.click();} });
+document.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'){e.preventDefault();setSearch(true);} else if(e.key==='Escape'&&!$('search-panel').hidden)setSearch(false); });
+$('word-goal').addEventListener('change',e=>{ if(!active)return; const goal=Math.max(0,Math.min(10000000,Number(e.target.value)||0)); updateBook(active,{wordGoal:goal}); updateWritingStats(); toast(goal?'Цель сохранена':'Цель отключена'); });
+function closeBookActions(){ document.querySelector('.book-actions')?.removeAttribute('open'); }
+$('rename-book').addEventListener('click',()=>{ const book=books.get(active); if(!book)return; const title=prompt('Новое название книги',book.title); if(title===null)return; const clean=title.trim(); if(!clean){toast('Название не может быть пустым');return;} updateBook(active,{title:clean.slice(0,160)}); closeBookActions(); toast('Книга переименована'); });
+$('export-book').addEventListener('click',()=>{ exportCurrentBook(); closeBookActions(); toast('Экспорт книги подготовлен'); });
+$('backup-library').addEventListener('click',()=>{ const backup=createBackup(); downloadFile('pergamin-backup-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify(backup,null,2),'application/json;charset=utf-8'); closeBookActions(); toast('Резервная копия библиотеки сохранена'); });
+$('restore-library').addEventListener('click',()=>{ closeBookActions(); $('restore-file').value=''; $('restore-file').click(); });
+$('restore-file').addEventListener('change',async e=>{ const file=e.target.files?.[0]; if(!file)return; if(file.size>100*1024*1024){toast('Файл слишком большой (максимум 100 МБ)');return;} try{ const payload=JSON.parse(await file.text()); if(!confirm('Добавить книги из резервной копии в текущую библиотеку? Книги с теми же идентификаторами будут обновлены.'))return; const count=await restoreBackup(payload); toast('Восстановлено книг: '+count); }catch(err){console.error(err);toast('Не удалось восстановить: '+String(err.message||err).slice(0,100));} });
+$('delete-book').addEventListener('click',async()=>{ const book=books.get(active); if(!book)return; closeBookActions(); if(!confirm('Удалить книгу «'+book.title+'»? Отменить это действие можно только через резервную копию.'))return; try{await deleteBook(active);toast('Книга удалена');}catch(err){console.error(err);toast('Не удалось удалить книгу');} });
+document.addEventListener('click',e=>{ const details=document.querySelector('.book-actions'); if(details?.open&&!details.contains(e.target))details.removeAttribute('open'); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+window.addEventListener('pagehide', flush);
+window.addEventListener('beforeunload', e => { flush(); if (dirty || savePending || failedSaves.size) { e.preventDefault(); e.returnValue = ''; } });
 async function init() {
  try {
   ms.contentEditable = 'false'; $('new-book').disabled = true;
   db = await new Promise((resolve, reject) => { const req = indexedDB.open('pergamin', 1); req.onupgradeneeded = () => req.result.createObjectStore('books', {keyPath:'id'}); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+  db.onversionchange = () => { db.close(); toast('Приложение обновилось в другом окне. Перезагрузите страницу.'); };
+  if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
   const saved = await new Promise((resolve, reject) => { const req = db.transaction('books').objectStore('books').getAll(); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
-  saved.forEach(b => books.set(b.id, b));
+  saved.forEach(b => { const clean=normalizeBook(b); books.set(clean.id, clean); });
   if (!books.size) { const b = makeBook('Хранитель северного ветра', 'акварель, холодные сине-серые тона, лёгкая дымка, в духе классической фэнтези-иллюстрации', '<h2>Глава 1</h2><p>Ветер пришёл с севера задолго до рассвета. Он скользнул по крышам спящей деревни, коснулся замёрзшего колодца и остановился у окна старого хранителя.</p><p>Мира проснулась от тихого звона. На подоконнике лежал серебряный лист — в этих краях деревья сбрасывали только золотые. Она осторожно взяла его в ладони и услышала далёкий шум моря.</p><p>За перевалом кто-то зажёг огонь. Там, где много лет не было ни дорог, ни людей, начиналась её история.</p>'); books.set(b.id,b); persist(b); }
   refreshLibrary(); let lastId = ''; try { lastId = localStorage.getItem('pg.lastBook') || ''; } catch (e) {} if (!books.has(lastId)) { let best = ''; let bestScore = [-1, -1]; for (const b of books.values()) { const score = [(b.content || '').length, b.updatedAt || b.createdAt || 0]; if (score[0] > bestScore[0] || (score[0] === bestScore[0] && score[1] > bestScore[1])) { bestScore = score; best = b.id; } } lastId = best; } openBook(lastId); ms.contentEditable = 'true'; $('new-book').disabled = false; $('saved').textContent = '✓ Сохранено'; connectivity();
   let mode = '2'; try { mode = localStorage.getItem('pg.pages') || '2'; } catch (e) {} applyPages(mode);

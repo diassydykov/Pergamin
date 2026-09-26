@@ -39,7 +39,7 @@
   headingStyle: string,            // 'normal' | 'italic'
   paper: string,                   // "main|edge" (два hex через |)
   illusStyle: string,              // '' = стиль ещё не зафиксирован; иначе текст стиля
-  illusHistory: [ { what: string, dataUrl: string, ts: number } ],  // последние <=10
+  illusHistory: [ { id: string, what: string, prompt: string, ts: number } ],  // последние <=10; без dataURL-дубликатов
   createdAt: number, updatedAt: number
 }
 Новая книга: иллюстрации/стиль НЕ наследуются из других книг (изоляция).
@@ -51,8 +51,8 @@ window.__pg__ = {
   updateBook(id, patch): void,            // shallow-merge + persist + обновить updatedAt
   getSelectionText(): string,             // текущее выделение (trim)
   insertFigureAtSelection(bookId, {dataUrl, caption, prompt}): void,
-      // вставляет <figure class="illus"><img src=dataUrl><figcaption>caption</figcaption></figure>
-      // в позицию выделения (или в конец .manuscript); добавляет {what:caption,dataUrl,ts} в illusHistory (cap 10);
+      // вставляет <figure class="illus" data-figure-id="…"><img src=dataUrl></figure> без подписи
+      // в позицию выделения (или в конец .manuscript); добавляет {id,what:caption,prompt,ts} в illusHistory (cap 10);
       // persist
   isOnline(): boolean,
   toast(msg): void,
@@ -128,3 +128,13 @@ window.__pg__ = {
 ## 10. Done-критерии + self-test
 РукA self-test: открыть index.html → создаётся демо-книга; написать текст → сохранилось (обновить страницу, текст на месте); B/I/U/шрифт/бумага меняют вид; новая книга изолирована; window.__pg__ доступен (console: Object.keys(window.__pg__)).
 РукB self-test (без реального A): сделать мини-стенд (отдельный test-standalone.html, МОЖНО не включать в доставку), где мок window.__pg__ реализует контракт → проверить, что ai.js строит промт по правилу п.6, корректно работает офлайн-ветка и ветка фиксации стиля. test-standalone.html — только для проверки, в index.html не подключать.
+
+## 11. MVP-расширения (26.09.2026)
+- Модель книги дополнена `wordGoal: number` (0 = цель выключена).
+- Полнотекстовый поиск по открытой книге: Ctrl+F, список совпадений, переход к найденному фрагменту.
+- Статистика рукописи: слова, знаки, время чтения и прогресс цели.
+- Меню управления книгой: переименование, безопасное удаление, автономный HTML-экспорт.
+- Переносимая JSON-копия всей библиотеки и восстановление с валидацией/санитизацией HTML.
+- Мобильный режим всегда показывает одну страницу; сохранённый разворот автоматически возвращается на широком экране.
+- Пагинация обязана включать последний неполный экран и доводить прокрутку до `scrollHeight-clientHeight`.
+- Тесты: `npm test` и `npm run test:e2e` (изолированный временный Chrome-профиль, реальные IndexedDB/DOM/CDP-проверки).

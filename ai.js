@@ -244,6 +244,12 @@
 
       busy = true;
       btn.setAttribute('disabled', 'disabled');
+      var bookSelect = document.getElementById('books');
+      var newBookButton = document.getElementById('new-book');
+      var bookSelectWasDisabled = bookSelect ? bookSelect.disabled : false;
+      var newBookWasDisabled = newBookButton ? newBookButton.disabled : false;
+      if (bookSelect) bookSelect.disabled = true;
+      if (newBookButton) newBookButton.disabled = true;
       showLoading(host);
 
       var controller = new AbortController();
@@ -265,11 +271,14 @@
         .then(function (dataUrl) {
           var caption = excerpt.slice(0, 90);
           try {
-            pg.insertFigureAtSelection(bookId, {
+            var inserted = pg.insertFigureAtSelection(bookId, {
               dataUrl: dataUrl,
               caption: caption,
               prompt: prompt
             });
+            if (!inserted) {
+              throw new Error('Книга была удалена или стала недоступна');
+            }
           } catch (e) {
             throw new Error('Не удалось вставить иллюстрацию');
           }
@@ -301,6 +310,8 @@
           clearTimeout(timer);
           clearLoading(host);
           busy = false;
+          if (bookSelect) bookSelect.disabled = bookSelectWasDisabled;
+          if (newBookButton) newBookButton.disabled = newBookWasDisabled;
           refreshOnline();
         });
     });

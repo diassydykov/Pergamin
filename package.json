@@ -1,0 +1,9 @@
+{
+  "name": "pergamin-pwa",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:e2e": "node tests/mvp.e2e.mjs"
+  }
+}

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#e8d5ab"><meta name="description" content="Пергамин — ваша живая книга. Пишите и храните рукописи на этом устройстве.">
+<title>Пергамин — живая книга</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icons/icon-192.png"><link rel="apple-touch-icon" href="icons/icon-192.png"><link rel="stylesheet" href="book.css">
+<script src="book.js" defer></script><script src="ai.js" defer></script>
+</head>
+<body>
+<header class="toolbar" aria-label="Панель редактора">
+<div class="brand">✒ <span>Пергамин<small>ЖИВАЯ КНИГА</small></span></div>
+<div class="tools library"><label>Библиотека<select id="books" aria-label="Выбор книги"></select></label><button id="new-book">+ Новая книга</button></div>
+<div class="tools"><label>Шрифт<select id="font"><option value="'Cormorant Garamond', Georgia, serif">Cormorant Garamond</option><option value="'EB Garamond', Georgia, serif">EB Garamond</option><option value="'Caveat', cursive">Рукописный</option><option value="Georgia, serif">Georgia</option></select></label><label>Размер<input id="fsize" type="number" min="15" max="30" value="22" aria-label="Размер шрифта"></label></div>
+<div class="tools formatting"><button data-command="bold" title="Жирный (Ctrl+B)" aria-label="Полужирный"><b>B</b></button><button data-command="italic" title="Курсив (Ctrl+I)" aria-label="Курсив"><i>I</i></button><button data-command="underline" title="Подчёркнутый (Ctrl+U)" aria-label="Подчёркнутый"><u>U</u></button><button data-command="__tab" title="Отступ (Tab)" aria-label="Отступ">⇥</button></div>
+<div class="tools"><label>Стиль текста<select id="heading"><option value="p">Обычный текст</option><option value="h2">Глава</option><option value="h3">Подзаголовок</option></select></label><label>Заголовки<select id="heading-style"><option value="normal">Классические</option><option value="italic">Курсивные</option></select></label></div>
+<div class="tools formatting"><button data-command="justifyLeft" title="По левому краю (Ctrl+L)" aria-label="По левому краю">≡←</button><button data-command="justifyCenter" title="По центру (Ctrl+E)" aria-label="По центру">≡</button><button data-command="justifyRight" title="По правому краю (Ctrl+R)" aria-label="По правому краю">→≡</button><button data-command="justifyFull" title="По ширине (Ctrl+J)" aria-label="По ширине">☰</button></div>
+<label>Бумага<select id="paper"><option value="#f2e4c4|#d6bd8b">Пергамент</option><option value="#f6eddb|#ddd0b4">Слоновая кость</option><option value="#e5cfa4|#bca073">Старый свиток</option><option value="#e5e6d3|#b9bea2">Шалфей</option></select></label>
+<label>Страницы<select id="pages" aria-label="Страницы"><option value="1">1 страница</option><option value="2" selected>2 страницы</option></select></label>
+<div class="tools right"><button id="ruler-toggle" title="Линейка" aria-label="Линейка" aria-pressed="false" style="margin-right:8px">☰</button><button id="ai-gen" class="ai" disabled>🤖 Иллюстрация</button><span id="saved" role="status">Открываем…</span></div>
+</header>
+<main><div class="desk-caption"><span>ВАША ИСТОРИЯ НАЧИНАЕТСЯ ЗДЕСЬ</span><span id="connection">Локальная библиотека</span></div>
+<div class="page-frame"><div id="ruler-h" aria-hidden="true"><div class="ruler-ticks"></div><span class="rh rh-first" id="rh-first" title="Первая строка — перетащите"></span><span class="rh rh-left" id="rh-left" title="Левый отступ — перетащите"></span><span class="rh rh-right" id="rh-right" title="Правый отступ — перетащите"></span><span class="ruler-read" id="ruler-read"></span></div><div class="frame-body"><div id="ruler-v" aria-hidden="true"><div class="ruler-ticks"></div><span id="rv-cursor"></span></div><div id="page-viewport" class="page-viewport"><div id="page-scroll" class="page-scroll"><div class="book"><div class="spine" aria-hidden="true">ПЕРГАМИН</div><div id="page"><div class="running-title" id="book-title"><span class="rt-l"></span><span class="rt-r"></span></div><div class="ornament" aria-hidden="true">──── ❧ ────</div><div id="ms" class="manuscript" contenteditable="true" role="textbox" aria-label="Рукопись" aria-multiline="true" spellcheck="true" data-placeholder="Начните свою историю…"></div><div class="ornament bottom" aria-hidden="true">❦</div><footer class="folio"><span class="fl">— 1 —</span><span class="fr">— 2 —</span></footer></div></div></div><button id="pg-prev" class="page-arrow" aria-label="Предыдущая страница">‹</button><button id="pg-next" class="page-arrow" aria-label="Следующая страница">›</button><span id="pg-count" class="page-count" aria-hidden="true"></span></div></div></div>
+</main>
+<dialog id="new-dialog"><form id="new-form"><span class="eyebrow">НОВАЯ ИСТОРИЯ</span><h1>Откройте чистую страницу</h1><label>Название книги<input id="new-title" required maxlength="160" placeholder="Как называется ваша история?"></label><label>Стиль иллюстраций <small>необязательно</small><textarea id="new-style" rows="3" placeholder="Например: акварель, мягкий свет, осенние тона"></textarea></label><div class="dialog-actions"><button type="button" id="cancel-new">Отмена</button><button type="submit" class="primary">Создать книгу</button></div></form></dialog>
+<div id="ai-host"></div>
+<div id="fig-tools" role="toolbar" aria-label="Изображение"><button data-fig="left" title="Текст справа от картинки">⬅</button><button data-fig="right" title="Текст слева от картинки">➡</button><button data-fig="none" title="Картинка во всю ширину, текст под ней">▭</button><button data-fig="reset" title="Сбросить размер">⤢</button><button data-fig="regen" title="Перегенерировать (новая картинка)">⟲</button><button data-fig="delete" title="Удалить">✕</button></div>
+<div id="fig-resize" aria-hidden="true"></div>
+<div id="fig-hint" aria-hidden="true">Тянуть / стрелки — переместить · Shift — крупный шаг · Уголок — размер · ⟲ — новая картинка</div>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+</body></html>

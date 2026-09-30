@@ -1,9 +1,20 @@
 # User library and browser profile — never commit or delete
 pergamin-data/
 
+# Private settings and exported manuscripts
+.env
+.env.*
+*.pgbook
+*.pgenc
+pergamin-backup-*.json
+
 # Local test/runtime artifacts
 .test-profile/
 test-results/
+desktop-launcher/build/
+desktop-launcher/dist/
+desktop-launcher/*.spec
+desktop-launcher/__pycache__/
 *.log
 *.tmp
 .DS_Store

@@ -13,8 +13,8 @@
 ## 2. Технический стек (фикс)
 - Чистый HTML/CSS/JS, без фреймворков, без сборки. Один каталог = приложение.
 - Offline-first: service worker кэширует shell + шрифты + иконки. Контент в IndexedDB.
-- Шрифты: локальные woff2 в fonts/ (Cormorant Garamond, EB Garamond, один рукописный). Фолбэк — системный serif (Georgia/Palatino/Times) + cursive. Приложение обязано выглядеть книжно и без скачанных шрифтов.
-- Генерация: pollinations.ai (без ключа), model=flux, с seed на книгу для консистентности. Только при navigator.onLine + успешном HEAD-check.
+- Шрифты: локальные Cormorant Garamond, EB Garamond, Literata, Lora, Vollkorn и Caveat. Фолбэк — системный serif (Georgia/Palatino/Times) + cursive. Приложение обязано выглядеть книжно и офлайн.
+- Генерация: актуальный `gen.pollinations.ai/image`, model=flux с fallback turbo. Доступ пользователя получается через Pollinations OAuth 2.1 Authorization Code + PKCE (публичный App Key `pk_…`, точный redirect URI). Токен хранится только в `sessionStorage`. Только при `navigator.onLine` и наличии токена.
 - Хранение картинок: B отдёт dataURL; A сохраняет dataURL в книгу (IndexedDB) → картинка видна офлайн.
 
 ## 3. Карта файлов и ВЛАДЕНИЕ (не трогать чужое!)
@@ -59,7 +59,7 @@ window.__pg__ = {
   on(evt, cb): void   // evt: 'online' | 'offline' | 'bookopen' | 'selection'
 }
 Доп. DOM-якоря, которые РукA ОБЯЗАН создать и оставить:
-  - <button id="ai-gen" class="ai" disabled>🤖 Иллюстрация</button> в панели (РукB сам вешает click)
+  - <button id="ai-gen" class="ai" disabled>✦ Иллюстрация</button> в панели (РукB сам вешает click)
   - <div id="ai-host"></div> (для индикатора загрузки / модалки промта)
   - <div id="ms" contenteditable> (рукопись), <div id="page">, <div class="book">
 РукA НЕ реализует логику генерации — только хост-точки и контракт. До подключения ai.js ИИ-кнопка может показывать заглушку (через inline-stub в book.js), которую ai.js перекрывает.
@@ -80,9 +80,9 @@ window.__pg__ = {
   - При клике #ai-gen: excerpt = window.__pg__.getSelectionText(). Пусто → toast("Сначала выделите текст"), выход.
   - Если !isOnline() → toast("Нет интернета — генерация недоступна"), выход. (Кнопка должна быть disabled офлайн — РукB слушает on('online'/'offline') и setAttribute.)
   - Загрузка: показ индикатора в #ai-host (например, "🖋 рисую…"), кнопка disabled.
-  - URL: https://image.pollinations.ai/prompt/<encodeURIComponent(prompt)>?width=768&height=768&seed=<seed>&model=flux&nologo=true
-      seed = числовой hash от book.id (стabilen на книгу; одинаковый seed + стиль = консистентность).
-  - fetch(url, {cache:'no-store'}) → blob → dataURL (base64). Ошибка/таймаут(60с) → toast с ошибкой, снять индикатор.
+  - URL: https://gen.pollinations.ai/image/<encodeURIComponent(prompt)>?width=768&height=768&seed=<seed>&model=flux&nologo=true
+      ключ передаётся только в заголовке `Authorization`; seed новый для каждой генерации/повтора.
+  - fetch(url, {cache:'no-store',headers:{Authorization:'Bearer …'}}) → blob → dataURL (base64). Ошибка/таймаут(60с) → toast с ошибкой, снять индикатор.
   - Успех:
       caption = excerpt.slice(0,90)
       window.__pg__.insertFigureAtSelection(bookId, {dataUrl, caption, prompt})
@@ -95,14 +95,14 @@ window.__pg__ = {
   - РукB ОБЯЗАН сам вешать #ai-gen click и слушать события. ai.js стартует после DOMContentLoaded и ожидает window.__pg__ (polling до 2с).
 
 ## 7. UI (РукA)
-Панель сверху (как Word): [логотип ✒ Пергамин] [выбор книги ▾] [+ Новая книга] [шрифт ▾] [размер] [B][I][U] [заголовок ▾] [выравнивание L/C/R] [бумага ▾] [Страницы 1/2 ▾] ...справа... [☰ линейка] [🤖 Иллюстрация(#ai-gen)] [💾 Сохранено].
+Панель сверху в два уровня: строка книги [Пергамин] [библиотека] [+ Новая] [поиск] [Навигатор] [Книга] [Изображение] [Линейка] [Фокус] [✦ Иллюстрация] [сохранение] и строка форматирования [шрифт] [размер] [B/I/U] [абзац] [заголовок] [выравнивание] [язык проверки] [+ Заметка] [бумага] [разворот].
   - B/I/U/выравнивание/заголовки — document.execCommand на .manuscript.
   - Кнопка «⇥» (__tab) — вставляет отступ. ВАЖНО: в Chromium баг — multi-NBSP через execCommand('insertText') кривится (2-й символ становится обычным пробелом 32). Рабочий способ: execCommand('insertHTML', false, '<span style="white-space:pre">    </span>') (4 обычных пробела в pre-span). Не «чинить» в insertText.
   - Горячие клавиши (document-level keydown, только внутри рукописи, без Shift): Ctrl+B/I/U — bold/italic/underline; Ctrl+L / Ctrl+E / Ctrl+R — выравнивание left/center/right; Ctrl+J — justified; Ctrl+S — сохранить (preventDefault). Отображаются в title/подсказках кнопок.
   - Режим страниц (#pages select, 1|2): class .book.twp. Реализация — #ms{column-count:2;column-gap:64px} (текст течёт 2 колонками), центральный корешок #page::after (градиент), колонтитул (название книги) вверху ОБЕИХ страниц (#book-title grid 1fr 1fr, span .rt-l/.rt-r), нумерация — .folio .fl «— 1 —» слева / .fr «— 2 —» справа (justify-between). В .twp скрываются .ornament (чтобы не пересекали корешок) — орнаменты вне #ms, не колончатся. Сохраняется в localStorage('pergamin.pages'), по умолчанию 2.
   - ВАЖНО (cache): при любой правке book.css/book.js/index.html бить версию CACHE в sw.js (pergamin-shell-vN) — иначе service worker отдаёт старое (cache-first).
   - Адаптивная ширина (под любой монитор, в т.ч. ultrawide 3440×1440): `main{width:min(3040px,96vw);margin:auto}` — книга тянется на всю доступную ширину, центрируется, без фиксированного 1030px. `.frame-body` — flex; #page-viewport `flex:1`. Подпись `.desk-note` должна быть ПОСЛЕ `</div>` .page-frame (не внутри .frame-body — иначе сжимает книгу и даёт пустой правый столбец). Шрифт/поля растут на широких экранах: @media(min-width:1900px) 25px / (min-width:2600px) 29px + увеличенные padding #page.
-  - Пагинация (стрелки внизу по углам + счётчик): DOM `#page-viewport`(рамка, overflow:hidden, фикс. высота `min(78vh,1080px)`) → `#page-scroll`(overflow-y:auto) → `.book`. Стрелки #pg-prev(‹)/#pg-next(›) + #pg-count стоят ВНУТРИ #page-viewport, но ПОСЛЕ #page-scroll — не скроллятся. Страница = окно по высоте (viewport-windowed), НЕ разрезание DOM. `pgMetrics()`: vh=clientHeight, total=scrollHeight, `n=floor((total-vh)/vh)+1` (недостижимый хвост — не страница), `i=clamp(round(scrollTop/vh),0,n-1)`. `pgGo(i)` скроллит на i*vh (instant, behavior:smooth — зависал в headless). Кнопки читают `pgMetrics().i` LIVE (не кэшированный pgI). `pgPaint()` обновляет текст счётчика + disabled стрелок. Обновление: scroll-обработчик (fast path) + setInterval 120ms (safety net — scroll/rAF не срабатывают в headless-браузере и в фоновой вкладке) + MutationObserver(#ms subtree/characterData) + ResizeObserver(viewport) + resize. ВАЖНО: headless-браузер не fire rAF и не даёт scroll-события на программный scrollTop — poll обязателен.
+  - Пагинация: `.book` и `#ms-scroll` имеют фиксированную высоту. `#ms-scroll` — окно без колонок; внутри `#ms` имеет фиксированную высоту и горизонтальные CSS-колонки (`column-width`, `column-fill:auto`). `pgLayout()` рассчитывает ширину колонки и шаг разворота; `pgMetrics()` использует `scrollLeft`, не `scrollTop`. `pgTurn()` синхронно выбирает целевой разворот и запускает 850-мс Web Animation на `.pg-turn-leaf`. `#pg-flyer` содержит неподвижную половину прежнего разворота и две стороны поворачиваемого листа с визуальными копиями реального текста/изображений. Копии не содержат DOM-id и contenteditable; оригинал рукописи остаётся под ними. Повторная команда отменяет предыдущий эффект без потери выбранной страницы. Уменьшение движения отключает анимацию. Wheel, PageUp/PageDown и свайп перелистывают; каретка после ввода ведёт книгу через `pgAfterEdit()`, selectionchange во время ввода не опережает анимацию.
   - Линейка — ВНЕ книги, Word-стиль, ДВЕ оси. .page-frame оборачивает .book: сверху горизонтальная #ruler-h (полоса тиков + 3 перетаскиваемых маркера: #rh-left левый, #rh-first первая строка, #rh-right правый + readout #ruler-read «l · f · r»), слева вертикальная #ruler-v (тики + индикатор #rv-cursor — строка, где каретка, только показ). Кнопка-переключатель #ruler-toggle (☰, справа в панели; class .ruler-off на .page-frame, скрывает ОБЕ линейки).
      Горизонталь: pointerdown на маркере → pointermove/pointerup/pointercancel на window (НЕ полагаться на setPointerCapture — в Chromium при preventDefault() в pointerdown capture ломает роутинг move; window-уровень надёжен). Корректирует отступы ТЕКУЩЕГО абзаца (currentBlock): paddingLeft / textIndent / paddingRight. Математика — АБСОЛЮТНАЯ от стартового (startInd в pointerdown): значение = startInd ± dx; НИКОГДА не кумулятивно. КЛАМП: l 0..(colW-40), f 0..(colW-l-10), r 0..(colW-l-f-10). В развороте (.twp) — относительно АКТИВНОЙ колонки (rulerGeom: colW=(msW-gap)/2, origin по колонке) — маркеры не пересекают корешок.
      Вертикаль: rv-cursor следует за строкой каретки (collapsed range getClientRects → top+height/2, clamp по высоте #ruler-v); opacity 0 без каретки в тексте.
@@ -112,8 +112,8 @@ window.__pg__ = {
   - "+ Новая книга": модалка (название + описание стиля иллюстраций, необязательно) → создаёт book с пустым content.
   - Переключатель книг: перерисовывает .manuscript + применяет стиль книги.
   - Автосохранение: input → debounce 500мс → updateBook.
-Визуал книги: СВЕТЛАЯ старинная (выбор пользователя) — светлый переплёт/ткань, без тёмной рамки: .book border #cbb18a, bg linear-gradient #e3cfae→#ddc9a8 (светлые тона, орнамент-полоса), .spine #a08355, светлый .book:after. Цвет листа (пергамент #f2e4c4) — без изменений, нравится. Переплёт + орнаменты сохранены, только светлые тона.
-Иллюстрация (figure.illus): рамка, лёгкий поворот, капшион курсивом, img из dataUrl. Генерация (ai.js): retry ×3 + фолбэк модели flux→turbo при 500/429 (Pollinations бесплатный, падает под нагрузкой); при полном провале — понятная ошибка со сводкой попыток, без 500 в UI.
+Визуал книги: минималистичная классика — графитовый переплёт, костяная бумага, приглушённая бронза, без ярких акцентов. Панель разделена на строку книги и строку форматирования, чтобы элементы не ломались при переносе.
+Иллюстрация (figure.illus): рамка без декоративного поворота, img из dataUrl. Перетаскивание переводит рисунок в `data-layout="free"` с абсолютными координатами внутри рукописи; восемь маркеров меняют размер с сохранением пропорций. Режимы left/right/none возвращают рисунок в поток и обтекание. Генерация (ai.js): retry + fallback flux→turbo при 500/429; при полном провале — понятная ошибка со сводкой попыток.
 
 ## 8. Офлайн
 - sw.js: cache-first для shell/шрифтов/иконок; навигация → index.html.
@@ -131,10 +131,43 @@ window.__pg__ = {
 
 ## 11. MVP-расширения (26.09.2026)
 - Модель книги дополнена `wordGoal: number` (0 = цель выключена).
+- Модель книги дополнена `spellLanguage: 'ru'|'kk'|'en'` и массивом `notes`.
 - Полнотекстовый поиск по открытой книге: Ctrl+F, список совпадений, переход к найденному фрагменту.
 - Статистика рукописи: слова, знаки, время чтения и прогресс цели.
-- Меню управления книгой: переименование, безопасное удаление, автономный HTML-экспорт.
+- Меню управления книгой: переименование, безопасное удаление, HTML/EPUB/DOCX и мастер печати/PDF.
 - Переносимая JSON-копия всей библиотеки и восстановление с валидацией/санитизацией HTML.
+- `studio.js`: структура по H1/H2/H3, редакторские заметки, фокусный режим,
+  ручные и автоматические версии в IndexedDB `pergamin-studio` (до 50 на книгу).
+- Импорт пользовательских изображений, свободное позиционирование, восемь маркеров
+  размера, кадрирование, поворот, обтекание и изменение z-порядка.
 - Мобильный режим всегда показывает одну страницу; сохранённый разворот автоматически возвращается на широком экране.
 - Пагинация обязана включать последний неполный экран и доводить прокрутку до `scrollHeight-clientHeight`.
+
+## 12. Обновление 29.09.2026 — настоящие развороты и редактура
+
+- Пагинация больше не использует вертикальный `scrollTop` как источник истины.
+  Текст течёт по горизонтальным CSS-колонкам внутри `#ms`: JS задаёт
+  `height`, `columnWidth`, `columnGap`, `columnFill:auto`, а `#ms-scroll`
+  перелистывает развороты по `scrollLeft`. В режиме 2 страниц шаг равен двум
+  колонкам; в мобильном режиме — одной.
+- `pgMetrics()` считает `maxScroll` как `#ms.scrollWidth - #ms-scroll.clientWidth`.
+  Финальный неполный разворот должен быть достижим; e2e проверяет `scrollLeft`.
+- После каждого ввода `pgAfterEdit()` раскрывает каретку: пустые абзацы дают
+  пустой `Range.getClientRects()`, поэтому fallback обязан брать
+  `currentBlock().getBoundingClientRect()`. Если блок ушёл за видимый разворот,
+  `pgTurn()` переворачивает страницу, без вертикального растягивания книги.
+- Линейка берёт геометрию от видимой страницы (`#ms-scroll.getBoundingClientRect`
+  + текущий `pgLayout`), поэтому маркеры работают на левой или правой странице
+  разворота отдельно.
+- JSON backup сохранён, добавлена зашифрованная копия `.pgenc`:
+  `PBKDF2-SHA256`, 210000 итераций, `AES-GCM`, случайные salt/iv.
+- Заметки хранят `anchor`: стартовую позицию, контекст до/после и цитату.
+  Поиск заметки: точная цитата → контекст → ближайшее слово рядом со старой
+  позицией.
+- Режим правок хранит вставки в `<ins data-pg-change>` и удаления в
+  `<del data-pg-change>`; принять = оставить ins и удалить del, отклонить =
+  удалить ins и вернуть del.
+- EPUB/DOCX экспорт очищает редакторские правки, добавляет автора (`byline`) и
+  оглавление по H1/H2/H3. DOCX получает `docProps/core.xml`, EPUB — `dc:creator`
+  и nav.xhtml с anchors.
 - Тесты: `npm test` и `npm run test:e2e` (изолированный временный Chrome-профиль, реальные IndexedDB/DOM/CDP-проверки).

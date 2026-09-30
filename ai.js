@@ -11,6 +11,86 @@
   var FETCH_TIMEOUT_MS = 60000;
   var OFFLINE_TITLE = 'Генерация доступна только при интернете';
 
+  function sessionKey() {
+    try { return String(sessionStorage.getItem('pg.pollinations.key') || '').trim(); }
+    catch (e) { return ''; }
+  }
+
+  function base64Url(bytes) {
+    var s = '';
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  }
+
+  function randomToken(size) {
+    var bytes = new Uint8Array(size);
+    crypto.getRandomValues(bytes);
+    return base64Url(bytes);
+  }
+
+  function redirectUri() {
+    return location.origin + location.pathname;
+  }
+
+  async function pkceChallenge(verifier) {
+    var digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+    return base64Url(new Uint8Array(digest));
+  }
+
+  async function oauthEndpoints() {
+    var fallback = {
+      authorization_endpoint: 'https://enter.pollinations.ai/authorize',
+      token_endpoint: 'https://enter.pollinations.ai/api/oauth/token'
+    };
+    try {
+      var response = await fetch('https://enter.pollinations.ai/.well-known/oauth-authorization-server', {cache:'no-store'});
+      if (!response.ok) return fallback;
+      var metadata = await response.json();
+      for (var key of ['authorization_endpoint','token_endpoint']) {
+        var url = new URL(metadata[key]);
+        if (url.protocol !== 'https:' || url.hostname !== 'enter.pollinations.ai') return fallback;
+      }
+      return metadata;
+    } catch (e) { return fallback; }
+  }
+
+  async function beginOAuth(clientId) {
+    var verifier = randomToken(48), state = randomToken(24), redirect = redirectUri();
+    var challenge = await pkceChallenge(verifier);
+    sessionStorage.setItem('pg.oauth.verifier', verifier);
+    sessionStorage.setItem('pg.oauth.state', state);
+    sessionStorage.setItem('pg.oauth.client', clientId);
+    localStorage.setItem('pg.pollinations.clientId', clientId);
+    var endpoints = await oauthEndpoints();
+    var params = new URLSearchParams({response_type:'code',client_id:clientId,redirect_uri:redirect,scope:'usage',models:'flux,turbo',budget:'10',expiry:'7',state:state,code_challenge:challenge,code_challenge_method:'S256'});
+    location.assign(endpoints.authorization_endpoint + '?' + params.toString());
+  }
+
+  async function finishOAuth(pg, refresh) {
+    var query = new URLSearchParams(location.search), code = query.get('code'), error = query.get('error');
+    if (!code && !error) return;
+    try {
+      if (error) throw new Error(query.get('error_description') || error);
+      var state = sessionStorage.getItem('pg.oauth.state') || '';
+      if (!state || query.get('state') !== state) throw new Error('Проверка state не прошла');
+      var verifier = sessionStorage.getItem('pg.oauth.verifier') || '';
+      var clientId = sessionStorage.getItem('pg.oauth.client') || localStorage.getItem('pg.pollinations.clientId') || '';
+      if (!verifier || !clientId) throw new Error('Сеанс подключения истёк');
+      var endpoints = await oauthEndpoints();
+      var response = await fetch(endpoints.token_endpoint, {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code:code,client_id:clientId,redirect_uri:redirectUri(),code_verifier:verifier})});
+      var payload = await response.json().catch(function(){ return {}; });
+      if (!response.ok || !payload.access_token) throw new Error(payload.error_description || payload.error || 'Pollinations не выдал токен');
+      sessionStorage.setItem('pg.pollinations.key', payload.access_token);
+      safeToast(pg, 'Pollinations подключён через BYOP');
+    } catch (err) {
+      safeToast(pg, 'Не удалось подключить Pollinations: ' + String(err.message || err).slice(0, 90));
+    } finally {
+      for (var key of ['pg.oauth.verifier','pg.oauth.state','pg.oauth.client']) sessionStorage.removeItem(key);
+      history.replaceState({}, document.title, location.pathname + location.hash);
+      refresh();
+    }
+  }
+
   /** Стабильный целочисленный hash строки (для seed на книгу). */
   function hashString(str) {
     var h = 2166136261;
@@ -160,6 +240,12 @@
   function bind(pg) {
     var btn = document.getElementById('ai-gen');
     var host = document.getElementById('ai-host');
+    var settingsBtn = document.getElementById('generation-settings');
+    var settingsDialog = document.getElementById('generation-dialog');
+    var settingsForm = document.getElementById('generation-form');
+    var clientInput = document.getElementById('generation-client-id');
+    var redirectInput = document.getElementById('generation-redirect');
+    var generationStatus = document.getElementById('generation-status');
     if (!btn) return;
 
     var busy = false;
@@ -171,7 +257,10 @@
       } catch (e) {
         online = true;
       }
-      if (!busy) setButtonOnlineState(btn, online);
+      if (!busy) {
+        setButtonOnlineState(btn, online && !!sessionKey());
+        if (online && !sessionKey()) btn.setAttribute('title', 'Сначала: Книга → Подключить генерацию');
+      }
       else if (!online) {
         btn.setAttribute('disabled', 'disabled');
         btn.setAttribute('title', OFFLINE_TITLE);
@@ -187,6 +276,33 @@
       /* ignore */
     }
     refreshOnline();
+    finishOAuth(pg, refreshOnline);
+
+    if (settingsBtn && settingsDialog && settingsForm && clientInput) {
+      settingsBtn.addEventListener('click', function () {
+        var menu = settingsBtn.closest('details');
+        if (menu) menu.removeAttribute('open');
+        try { clientInput.value = localStorage.getItem('pg.pollinations.clientId') || ''; } catch (e) { clientInput.value = ''; }
+        if (redirectInput) redirectInput.value = redirectUri();
+        if (generationStatus) generationStatus.textContent = sessionKey() ? 'Аккаунт подключён до закрытия приложения.' : 'Аккаунт не подключён.';
+        settingsDialog.showModal();
+        clientInput.focus();
+      });
+      var cancelSettings = document.getElementById('cancel-generation');
+      if (cancelSettings) cancelSettings.addEventListener('click', function () { settingsDialog.close(); });
+      var disconnect = document.getElementById('disconnect-generation');
+      if (disconnect) disconnect.addEventListener('click', function () { sessionStorage.removeItem('pg.pollinations.key'); refreshOnline(); if (generationStatus) generationStatus.textContent='Аккаунт не подключён.'; safeToast(pg,'Pollinations отключён'); });
+      settingsForm.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        var clientId = String(clientInput.value || '').trim();
+        if (!/^pk_[A-Za-z0-9_-]{6,}$/.test(clientId)) { safeToast(pg,'Нужен публичный App Key, начинающийся с pk_'); clientInput.focus(); return; }
+        try {
+          await beginOAuth(clientId);
+        } catch (e) {
+          safeToast(pg, 'Не удалось начать OAuth: ' + String(e.message || e).slice(0, 80));
+        }
+      });
+    }
 
     btn.addEventListener('click', function () {
       if (busy) return;
@@ -320,16 +436,19 @@
   /** Fetches one illustration image (dataUrl blob). prompt+seed decide the result. */
   function fetchIllustration(prompt, seed, signal) {
    var MODELS = ['flux', 'turbo'];
+   var key = sessionKey();
+   if (!key) return Promise.reject(new Error('Сначала настройте ключ генерации в меню «Книга»'));
    function buildUrl(model) {
-   return 'https://image.pollinations.ai/prompt/' +
-   encodeURIComponent(prompt) +
+   return 'https://gen.pollinations.ai/image/' + encodeURIComponent(prompt) +
    '?width=768&height=768&seed=' + seed + '&model=' + model + '&nologo=true&private=true';
    }
    function attempt(model) {
-   return fetch(buildUrl(model), { cache: 'no-store', signal: signal })
+   var options = { cache: 'no-store', signal: signal };
+   options.headers = { Authorization: 'Bearer ' + key }; options.credentials = 'omit'; options.referrerPolicy = 'no-referrer';
+   return fetch(buildUrl(model), options)
    .then(function (res) {
    if (!res.ok) {
-   var e = new Error('Сервер ответил ' + res.status);
+   var e = new Error(res.status === 401 || res.status === 403 ? 'Ключ генерации не принят' : 'Сервер ответил ' + res.status);
    e.status = res.status;
    e.transient = (res.status === 500 || res.status === 502 || res.status === 503 || res.status === 429);
    throw e;
@@ -365,6 +484,7 @@
   window.__pgAiBuildPrompt = buildPrompt;
   window.__pgAiHash = hashString;
   window.__pgAiFetchIllustration = fetchIllustration;
+  window.__pgAiOAuth = { beginOAuth: beginOAuth, redirectUri: redirectUri, pkceChallenge: pkceChallenge, oauthEndpoints: oauthEndpoints };
 
   function start() {
     waitForPg(function (pg) {

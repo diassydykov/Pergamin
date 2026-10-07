@@ -56,7 +56,7 @@ const chrome = spawn(
     "--disable-component-update",
     "--disable-default-apps",
     "--window-size=1400,1000",
-    `http://127.0.0.1:${PORT}/?e2e=1`,
+    `http://127.0.0.1:${PORT}/?mode=editor&e2e=1`,
   ],
   { stdio: "ignore" },
 );

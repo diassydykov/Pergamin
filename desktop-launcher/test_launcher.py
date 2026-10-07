@@ -48,7 +48,12 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIn(b"__pgAtelier__", response.read())
 
-        for blocked in ("pergamin-data/", "README.md", ".git/config", "desktop-launcher/pergamin_launcher.py"):
+        for asset in ("library.js", "library-import.js", "library.css", "catalog/starter.json"):
+            with urllib.request.urlopen(self.base_url + asset, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertGreater(len(response.read()), 100)
+
+        for blocked in ("pergamin-data/", "README.md", ".git/config", "desktop-launcher/pergamin_launcher.py", "catalog/private.json", ".catalog-cache/"):
             with self.assertRaises(urllib.error.HTTPError) as missing:
                 urllib.request.urlopen(self.base_url + blocked, timeout=5)
             self.assertEqual(missing.exception.code, 404)

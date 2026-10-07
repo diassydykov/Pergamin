@@ -1,6 +1,6 @@
 'use strict';
-const CACHE = 'pergamin-shell-v32';
-const SHELL = ['index.html','book.css','mvp.css','book.js','studio.js','atelier.js','manifest.webmanifest','icons/icon-192.png','icons/icon-512.png'];
+const CACHE = 'pergamin-shell-v37';
+const SHELL = ['index.html','book.css','mvp.css','book.js','studio.js','atelier.js','library.js','library-import.js','library.css','catalog/starter.json','manifest.webmanifest','icons/icon-192.png','icons/icon-512.png'];
 const OPTIONAL = ['ai.js','fonts/CormorantGaramond-Regular.woff2','fonts/CormorantGaramond-Semibold.woff2','fonts/CormorantGaramond-Italic.woff2','fonts/EBGaramond-Regular.woff2','fonts/Caveat-Medium.woff2','fonts/Literata-Regular.ttf','fonts/Lora-Regular.ttf','fonts/Vollkorn-Regular.ttf'];
 self.addEventListener('install', event => event.waitUntil((async () => {
  const cache = await caches.open(CACHE); await cache.addAll(SHELL);

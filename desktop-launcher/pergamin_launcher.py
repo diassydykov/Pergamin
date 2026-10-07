@@ -23,7 +23,7 @@ APP_URL = f"http://127.0.0.1:{PORT}/"
 MUTEX_NAME = "Local\\PergaminDesktopApp"
 ERROR_ALREADY_EXISTS = 183
 READY_PATH = "/__pergamin_ready__"
-ALLOWED_TOP_LEVEL = {"index.html", "book.css", "mvp.css", "book.js", "ai.js", "studio.js", "atelier.js", "manifest.webmanifest", "sw.js"}
+ALLOWED_TOP_LEVEL = {"index.html", "book.css", "mvp.css", "book.js", "ai.js", "studio.js", "atelier.js", "library.js", "library-import.js", "library.css", "manifest.webmanifest", "sw.js"}
 ALLOWED_DIRECTORIES = {"fonts", "icons"}
 ALLOWED_EXTENSIONS = {".woff2", ".ttf", ".png", ".jpg", ".jpeg", ".svg", ".ico"}
 
@@ -90,6 +90,8 @@ class PergaminHandler(BaseHTTPRequestHandler):
         parts = tuple(part for part in relative.split("/") if part)
         allowed = (
             len(parts) == 1 and parts[0] in ALLOWED_TOP_LEVEL
+        ) or (
+            parts == ("catalog", "starter.json")
         ) or (
             len(parts) == 2
             and parts[0] in ALLOWED_DIRECTORIES

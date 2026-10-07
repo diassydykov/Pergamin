@@ -18,4 +18,8 @@ desktop-launcher/__pycache__/
 *.log
 *.tmp
 .DS_Store
+.catalog-cache/
+node_modules/
+**/__pycache__/
+pergamin-reader-*.json
 Thumbs.db
